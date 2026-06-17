@@ -1,0 +1,259 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+if game.GameId ~= 6035872082 then return end
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer or Players:GetPropertyChangedSignal("LocalPlayer"):Wait() and Players.LocalPlayer
+
+print("Rivals Random TP Script Loaded")
+
+local success, err = pcall(function()
+    ----------------------------------------------------------------
+    -- Anticheat Disabler (델타용)
+    ----------------------------------------------------------------
+    assert(getgc, "executor missing required function getgc")
+    assert(debug and debug.info, "executor missing required function debug.info")
+    assert(hookfunction, "executor missing required function hookfunction")
+    assert(getconnections, "executor missing required function getconnections")
+    assert(newcclosure, "executor missing required function newcclosure")
+
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local LogService = game:GetService("LogService")
+    local ScriptContext = game:GetService("ScriptContext")
+
+    task.spawn(function()
+        local hooked = 0
+        for _, v in pairs(getgc(true)) do
+            if typeof(v) == "function" then
+                local ok, src = pcall(function() return debug.info(v, "s") end)
+                if ok and type(src) == "string" and string.find(src, "AnalyticsPipelineController") then
+                    hooked += 1
+                    local oldfn
+                    oldfn = hookfunction(v, newcclosure(function(...) return wait(9e9) end))
+                end
+            end
+        end
+        print("Hanged " .. hooked .. " functions")
+    end)
+
+    task.spawn(function()
+        local ok, remote = pcall(function()
+            return ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AnalyticsPipeline"):WaitForChild("RemoteEvent")
+        end)
+        if ok and remote and remote.OnClientEvent then
+            local hooked = 0
+            for _, conn in pairs(getconnections(remote.OnClientEvent)) do
+                if conn and conn.Function then
+                    if pcall(function() hookfunction(conn.Function, newcclosure(function(...) end)) end) then
+                        hooked += 1
+                    end
+                end
+            end
+            print("Hooked " .. hooked .. " anticheat remotes")
+        end
+    end)
+
+    task.spawn(function()
+        local hooked = 0
+        for _, conn in pairs(getconnections(LogService.MessageOut)) do
+            if conn and conn.Function then
+                if pcall(function() hookfunction(conn.Function, newcclosure(function(...) end)) end) then
+                    hooked += 1
+                end
+            end
+        end
+        print("Hooked " .. hooked .. " MessageOut connections")
+    end)
+
+    task.spawn(function()
+        local hooked = 0
+        for _, conn in ipairs(getconnections(ScriptContext.Error)) do
+            if pcall(function() conn:Disable() end) then hooked += 1 end
+        end
+        print("Hooked " .. hooked .. " error connections")
+        pcall(function() hookfunction(ScriptContext.Error.Connect, newcclosure(function(...) return nil end)) end)
+    end)
+
+    task.spawn(function()
+        local KickNames = { "Kick", "kick" }
+        for _, name in ipairs(KickNames) do
+            local fn = player[name]
+            if type(fn) == "function" then
+                local oldkick
+                oldkick = hookfunction(fn, newcclosure(function(self, ...)
+                    if self == player then return end
+                    return oldkick(self, ...)
+                end))
+            end
+        end
+    end)
+
+    ----------------------------------------------------------------
+    -- Random TP + Aimlock (사용자 코드 기반)
+    ----------------------------------------------------------------
+    local RunService = game:GetService("RunService")
+    local camera = workspace.CurrentCamera
+
+    local lockedTarget = nil
+    local isLocked = false
+    local tpDistance = 3
+    local normalSearchDistance = 100
+    local mapTalSearchDistance = 10000
+
+    ----------------------------------------------------------------
+    -- GUI
+    ----------------------------------------------------------------
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "CustomTargetGui"
+    screenGui.Parent = player:WaitForChild("PlayerGui")
+    screenGui.ResetOnSpawn = false
+
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0, 200, 0, 110)
+    mainFrame.Position = UDim2.new(1, -220, 0, 60)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    mainFrame.BackgroundTransparency = 0.4
+    mainFrame.Parent = screenGui
+
+    local uiCorner = Instance.new("UICorner")
+    uiCorner.Parent = mainFrame
+
+    local aimButton = Instance.new("TextButton")
+    aimButton.Size = UDim2.new(0, 180, 0, 40)
+    aimButton.Position = UDim2.new(0, 10, 0, 10)
+    aimButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    aimButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    aimButton.Text = "START RANDOM TRACKING"
+    aimButton.Font = Enum.Font.GothamBold
+    aimButton.TextSize = 14
+    aimButton.Parent = mainFrame
+
+    local mapTalButton = Instance.new("TextButton")
+    mapTalButton.Size = UDim2.new(0, 180, 0, 40)
+    mapTalButton.Position = UDim2.new(0, 10, 0, 60)
+    mapTalButton.BackgroundColor3 = Color3.fromRGB(100, 0, 200)
+    mapTalButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    mapTalButton.Text = "맵탈"
+    mapTalButton.Font = Enum.Font.GothamBold
+    mapTalButton.TextSize = 14
+    mapTalButton.Parent = mainFrame
+
+    ----------------------------------------------------------------
+    -- 타겟팅 함수
+    ----------------------------------------------------------------
+    local function getPlayerByNickname(name)
+        local myChar = player.Character
+        if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+      
+        local myPos = myChar.HumanoidRootPart.Position
+        local candidates = {}
+      
+        local searchDist = name == "maptal" and mapTalSearchDistance or normalSearchDistance
+      
+        for _, p in pairs(Players:GetPlayers()) do
+            if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                local dist = (p.Character.HumanoidRootPart.Position - myPos).Magnitude
+                if dist <= searchDist then
+                    table.insert(candidates, p)
+                end
+            end
+        end
+      
+        if #candidates == 0 then return nil end
+        return candidates[math.random(1, #candidates)]
+    end
+
+    ----------------------------------------------------------------
+    -- 토글 함수
+    ----------------------------------------------------------------
+    local function toggleTracking()
+        if isLocked then
+            isLocked = false
+            lockedTarget = nil
+            aimButton.Text = "START RANDOM TRACKING"
+            aimButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        else
+            local target = getPlayerByNickname("")
+            if target then
+                lockedTarget = target
+                isLocked = true
+                aimButton.Text = "TRACKING: " .. target.DisplayName
+                aimButton.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+            else
+                aimButton.Text = "NO TARGET FOUND"
+                task.wait(1)
+                aimButton.Text = "START RANDOM TRACKING"
+            end
+        end
+    end
+
+    aimButton.MouseButton1Click:Connect(toggleTracking)
+
+    ----------------------------------------------------------------
+    -- 맵탈 버튼
+    ----------------------------------------------------------------
+    mapTalButton.MouseButton1Click:Connect(function()
+        local target = getPlayerByNickname("maptal")
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            local myChar = player.Character
+            local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local targetHrp = target.Character.HumanoidRootPart
+          
+            if myHrp then
+                local backPos = targetHrp.Position - (targetHrp.CFrame.LookVector * tpDistance)
+                myHrp.CFrame = CFrame.new(backPos, targetHrp.Position)
+              
+                local originalText = mapTalButton.Text
+                mapTalButton.Text = "TELEPORTED!"
+                mapTalButton.BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+                task.wait(0.8)
+                mapTalButton.Text = originalText
+                mapTalButton.BackgroundColor3 = Color3.fromRGB(100, 0, 200)
+            end
+        else
+            mapTalButton.Text = "NO TARGET"
+            task.wait(1)
+            mapTalButton.Text = "맵탈"
+        end
+    end)
+
+    ----------------------------------------------------------------
+    -- 메인 루프
+    ----------------------------------------------------------------
+    RunService.RenderStepped:Connect(function()
+        if isLocked and lockedTarget and lockedTarget.Character then
+            local targetChar = lockedTarget.Character
+            local myChar = player.Character
+          
+            local hrp = targetChar:FindFirstChild("HumanoidRootPart")
+            local head = targetChar:FindFirstChild("Head")
+            local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            
+            if hrp and head and myHrp then
+                camera.CFrame = CFrame.new(camera.CFrame.Position, head.Position)
+                local backPos = hrp.Position - (hrp.CFrame.LookVector * tpDistance)
+                myHrp.CFrame = CFrame.new(backPos, hrp.Position)
+            else
+                isLocked = false
+                lockedTarget = nil
+                aimButton.Text = "START RANDOM TRACKING"
+                aimButton.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+            end
+        end
+    end)
+
+end)
+
+if not success then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Random TP Script",
+        Text = "Error, check console",
+        Duration = 5
+    })
+    warn("Script failed: " .. tostring(err))
+else
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "Random TP + Aimlock",
+        Text = "Loaded with Anticheat Bypass",
+        Duration = 5
+    })
+end
